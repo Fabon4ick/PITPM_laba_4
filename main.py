@@ -1,6 +1,7 @@
+from typing import List
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Float
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Float, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.exc import IntegrityError
@@ -244,3 +245,49 @@ def update_receipt(receipt_id: int, receipt: ReceiptCreate, db: Session = Depend
     db.refresh(existing_receipt)
 
     return existing_receipt
+
+
+@app.get("/receipt")
+def get_latest_receipts(db: Session = Depends(get_db)):
+    last_month = datetime.datetime.now() - datetime.timedelta(days=30)
+    receipt = db.query(Receipt).filter(Receipt.receiptDate >= last_month).all()
+    return receipt
+
+
+@app.get("/total_quantity_per_product")
+def get_total_quantity_per_product(db: Session = Depends(get_db)):
+    year_ago = datetime.datetime.now() - datetime.timedelta(days=365)
+    total_quantity_per_product = db.query(Model.name, func.sum(Receipt.quantity).label('total_quantity')).join(
+        Receipt).filter(Receipt.receiptDate >= year_ago).group_by(Model.name).all()
+
+    result = []
+    for item in total_quantity_per_product:
+        result.append({"name": item[0], "total_quantity": item[1]})
+
+    return result
+
+
+@app.get("/expensive_models/", response_model=List[ModelResponse])
+def get_expensive_models(db: Session = Depends(get_db)):
+    expensive_models = db.query(Model).filter(Model.price > 5).all()
+    return expensive_models
+
+
+@app.get("/total_sales_per_model", response_model=dict)
+def get_total_sales_per_model(month: int, db: Session = Depends(get_db)):
+    result = db.query(Model.name, func.sum(Receipt.quantity).label('total_quantity')).join(Receipt, Receipt.model_id == Model.id).filter(func.month(Receipt.receiptDate) == month).group_by(Model.name).all()
+    total_sales_per_model = {row[0]: row[1] for row in result}
+    return total_sales_per_model
+
+
+@app.get("/total_revenue_per_month", response_model=dict)
+def get_total_revenue_per_month(month: int, db: Session = Depends(get_db)):
+    result = db.query(func.sum(Receipt.quantity * Model.price).label('total_revenue')).join(Model, Model.id == Receipt.model_id).filter(func.month(Receipt.receiptDate) == month).first()
+    total_revenue = {"total_revenue": result[0] if result[0] else 0}
+    return total_revenue
+
+
+@app.get("/warehouse_employees", response_model=list)
+def get_warehouse_employees(db: Session = Depends(get_db)):
+    warehouse_employees = db.query(Receipt.whoAccepted).distinct().all()
+    return [employee[0] for employee in warehouse_employees]
